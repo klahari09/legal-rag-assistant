@@ -1,73 +1,48 @@
-import streamlit as st
 import os
-from utils import load_pdf, chunk_text
-from embedder import embed_texts
+import streamlit as st
 from retriever import add_to_db, retrieve
-from generator import generate_answer  # This now uses HuggingFace T5
+from utils import load_pdf, chunk_text
 
-st.set_page_config(page_title="🧑‍⚖️ Legal Research Assistant", layout="wide")
-st.title("🧑‍⚖️ Multi-Document Legal Research Assistant")
+st.set_page_config(page_title="Legal RAG Assistant", layout="wide")
 
-uploaded_files = st.file_uploader("Upload Legal PDFs", type=["pdf"], accept_multiple_files=True)
+# UI: File Upload
+st.title("📚 Legal Research Assistant")
+uploaded_files = st.file_uploader("Upload legal documents (PDFs)", type=["pdf"], accept_multiple_files=True)
 
+# Process Uploaded PDFs
 if uploaded_files:
-    all_chunks = []
-    all_meta = []
+    os.makedirs("temp", exist_ok=True)  # ✅ Ensure temp/ directory exists
 
-    for file in uploaded_files:
-        file_path = os.path.join("documents", file.name)
+    all_chunks = []
+    all_metadata = []
+    
+    for uploaded_file in uploaded_files:
+        file_path = f"temp/{uploaded_file.name}"
         with open(file_path, "wb") as f:
-            f.write(file.read())
+            f.write(uploaded_file.getbuffer())
 
         text = load_pdf(file_path)
-
-        # Show preview
-        print(f"\n--- Extracted text from {file.name} ---\n", text[:500])
-
-        if not text.strip():
-            st.warning(f"⚠️ No extractable text found in {file.name}. Skipping.")
-            continue
-
         chunks = chunk_text(text)
-
-        if not chunks:
-            st.warning(f"⚠️ No valid chunks created from {file.name}. Skipping.")
-            continue
-
+        
+        metadata = [{"source": uploaded_file.name}] * len(chunks)
         all_chunks.extend(chunks)
-        all_meta.extend([{"source": file.name}] * len(chunks))
+        all_metadata.extend(metadata)
 
-    if all_chunks:
-        with st.spinner("Embedding and indexing..."):
-            embeddings = embed_texts(all_chunks)
-            if len(embeddings) > 0:
-                add_to_db(all_chunks, all_meta, embeddings)
-                st.success("✅ Embeddings stored in vector DB.")
-            else:
-                st.error("❌ Embedding failed. Possibly due to empty text.")
-    else:
-        st.error("❌ No valid documents processed. Please upload a readable PDF.")
+    st.success("✅ Documents processed and chunked.")
 
-st.markdown("---")
-question = st.text_input("Ask your legal question:")
+    
+    # Save to FAISS
+    if st.button("➕ Add to Vector Store"):
+        add_to_db(all_chunks, all_metadata)
+        st.success("✅ Vector store updated.")
 
-if question:
-    query_embedding = embed_texts([question])[0]
-    retrieved_chunks, metadata = retrieve(query_embedding)
+# Query Interface
+query = st.text_input("🔎 Ask a legal question")
 
-    # Limit to top 3 chunks for clarity and speed
-    top_chunks = retrieved_chunks[:3]
-    top_metadata = metadata[:3]
-
-    # Add prompt template
-    context = "\n".join(top_chunks)
-    full_prompt = f"Summarize the answer to this legal question:\n'{question}'\n\nBased on the following legal document context:\n{context}"
-
-    answer = generate_answer(question, retrieved_chunks)
-
-    st.subheader("📘 Answer")
-    st.write(answer)
-
-    st.subheader("📄 Sources")
-    for meta, chunk in zip(top_metadata, top_chunks):
-        st.markdown(f"**{meta['source']}** → {chunk[:200]}...")
+if query:
+    st.info(f"Searching for: **{query}**")
+    docs = retrieve(query)
+    for i, doc in enumerate(docs):
+        st.markdown(f"**Result {i+1}:**")
+        st.write(doc.page_content)
+        st.caption(f"📄 Source: {doc.metadata.get('source', 'Unknown')}")
